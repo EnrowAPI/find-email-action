@@ -1,0 +1,133 @@
+name: 'Find Email - Enrow'
+description: 'Find a professional email address from a name and company domain'
+
+branding:
+  icon: 'mail'
+  color: 'blue'
+
+inputs:
+  api_key:
+    description: 'Your Enrow API key'
+    required: true
+  full_name:
+    description: 'Full name of the person (e.g. "John Doe")'
+    required: true
+  company_domain:
+    description: 'Company domain (e.g. "apple.com")'
+    required: false
+  company_name:
+    description: 'Company name (alternative to domain)'
+    required: false
+  country_code:
+    description: 'ISO 3166-1 alpha-2 country code'
+    required: false
+  wait:
+    description: 'Poll until the result is ready (true/false)'
+    required: false
+    default: 'true'
+
+outputs:
+  email:
+    description: 'The found email address'
+    value: ${{ steps.result.outputs.email }}
+  qualification:
+    description: 'Result qualification (valid, invalid)'
+    value: ${{ steps.result.outputs.qualification }}
+  id:
+    description: 'The search ID'
+    value: ${{ steps.result.outputs.id }}
+  raw:
+    description: 'Full JSON response'
+    value: ${{ steps.result.outputs.raw }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Find email
+      id: result
+      shell: bash
+      env:
+        API_KEY: ${{ inputs.api_key }}
+        FULL_NAME: ${{ inputs.full_name }}
+        COMPANY_DOMAIN: ${{ inputs.company_domain }}
+        COMPANY_NAME: ${{ inputs.company_name }}
+        COUNTRY_CODE: ${{ inputs.country_code }}
+        WAIT: ${{ inputs.wait }}
+      run: |
+        set -euo pipefail
+
+        # Split full_name into first and last
+        # Build JSON payload
+        PAYLOAD=$(jq -n \
+          --arg fn "$FULL_NAME" \
+          --arg cd "$COMPANY_DOMAIN" \
+          --arg cn "$COMPANY_NAME" \
+          --arg cc "$COUNTRY_CODE" \
+          '{fullname: $fn}
+           + (if $cd != "" then {company_domain: $cd} else {} end)
+           + (if $cn != "" then {company_name: $cn} else {} end)
+           + (if $cc != "" then {settings: {country_code: $cc}} else {} end)')
+
+        echo "::debug::Calling POST /email/find/single"
+
+        RESPONSE=$(curl -s -w "\n%{http_code}" \
+          -X POST "https://api.enrow.io/email/find/single" \
+          -H "Content-Type: application/json" \
+          -H "x-api-key: $API_KEY" \
+          -d "$PAYLOAD")
+
+        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+        BODY=$(echo "$RESPONSE" | sed '$d')
+
+        if [ "$HTTP_CODE" -ge 400 ]; then
+          echo "::error::API returned HTTP $HTTP_CODE: $BODY"
+          exit 1
+        fi
+
+        ID=$(echo "$BODY" | jq -r '.id // empty')
+        STATUS=$(echo "$BODY" | jq -r '.status // empty')
+
+        # Poll if wait=true and status is pending
+        if [ "$WAIT" = "true" ] && [ "$STATUS" = "pending" ] && [ -n "$ID" ]; then
+          echo "::debug::Polling for result (id=$ID)"
+          ELAPSED=0
+          while [ "$ELAPSED" -lt 30 ]; do
+            sleep 3
+            ELAPSED=$((ELAPSED + 3))
+
+            POLL=$(curl -s -w "\n%{http_code}" \
+              -X GET "https://api.enrow.io/email/find/single?id=$ID" \
+              -H "x-api-key: $API_KEY")
+
+            POLL_CODE=$(echo "$POLL" | tail -1)
+            BODY=$(echo "$POLL" | sed '$d')
+
+            if [ "$POLL_CODE" -ge 400 ]; then
+              echo "::error::Poll returned HTTP $POLL_CODE: $BODY"
+              exit 1
+            fi
+
+            STATUS=$(echo "$BODY" | jq -r '.status // empty')
+            if [ "$STATUS" != "pending" ]; then
+              break
+            fi
+          done
+
+          if [ "$STATUS" = "pending" ]; then
+            echo "::warning::Search still pending after 30 seconds (id=$ID)"
+          fi
+        fi
+
+        # Set outputs
+        {
+          echo "id=$ID"
+          echo "email=$(echo "$BODY" | jq -r '.email // empty')"
+          echo "qualification=$(echo "$BODY" | jq -r '.qualification // empty')"
+        } >> "$GITHUB_OUTPUT"
+
+        # Multi-line output for raw JSON
+        {
+          echo "raw<<ENROW_EOF"
+          echo "$BODY"
+          echo "ENROW_EOF"
+        } >> "$GITHUB_OUTPUT"
