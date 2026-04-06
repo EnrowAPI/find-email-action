@@ -1,12 +1,16 @@
 # Find Email Action
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/EnrowAPI/find-email-action)](https://github.com/EnrowAPI/find-email-action)
+[![Last commit](https://img.shields.io/github/last-commit/EnrowAPI/find-email-action)](https://github.com/EnrowAPI/find-email-action/commits)
+
 GitHub Action to find professional email addresses. Powered by [Enrow](https://enrow.io).
 
 ## Usage
 
 ```yaml
 - name: Find email
-  uses: enrow/find-email-action@v1
+  uses: EnrowAPI/find-email-action@v1
   id: enrow
   with:
     api_key: ${{ secrets.ENROW_API_KEY }}
